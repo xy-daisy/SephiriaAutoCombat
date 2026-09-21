@@ -1,6 +1,6 @@
 # Sephiria Auto Combat（自动索敌 / 自动攻击）
 
-版本 **v1.0.1** · 插件 GUID `com.sephiria.autocombat`
+版本 **v1.0.2** · 插件 GUID `com.sephiria.autocombat`
 
 **整个战斗房间**内自动锁定**距离最近的敌人**，并自动朝它挥动**当前武器**进行普攻。目标一直在动，锁定就跟着动 —— **不是**锁住一个就不放。
 
@@ -15,6 +15,30 @@
 - **自动面向**：会让角色朝向锁定的目标，你按鼠标打出去的每一刀也都飞向它。
 - **攻击触发距离按武器实测**，并且**随武器状态实时跟随**（神器、铁砧附魔、武器形态切换都会改判定框，详见下文）。
 - **快捷键有屏幕提示**：按下 F5 / F6 会像游戏原生提示一样在屏幕上显示一行当前状态。
+
+## 本版修复（v1.0.2）
+
+**症状**：开着自动攻击切到**法术攻击模式**，自动攻击就**再也不动了** —— 直到目标死亡或离开房间才恢复。
+
+**根因**：游戏自己会在好几个地方**悄悄松开攻击键**，而 mod 完全不知道。最典型的就是进法术模式：
+`PlayerInputController.HandleOnActivateCastMode` → `CastStop(100)` → `PlayerAvatar.AttackButtonUp()`。
+mod 内部仍然以为"键是按住的"，于是每个环节都认为一切正常（对近战 / 远程来说按住本来就是对的操作），
+角色就站着不动了 —— 日志里也看不出来，因为那一行显示的还是"正在攻击"。
+
+**同一条根因还有两个触发方式**（本版一并修掉）：
+
+- **你自己点一下鼠标**：非法术模式下松开开火键会走 `HandleOnFire` 的松手分支 → `CastStop(100)`，
+  和法术模式是同一行代码。也就是说以前"打着打着随手点一下鼠标"，自动攻击也会永久停住。
+- **任何 UI 接管 / 剧情封锁输入**（打开面板、Boss 登场、过场）：`PlayerInputController.OnDisable()`
+  里同样会松开一次。
+
+**修法**是一道**反向看门狗**：只要 mod 认为自己按着键，就每 `FireHeartbeatSeconds`（默认 `0.25` 秒）
+**回头核实一次游戏自己的开火标志**；发现游戏已经松了，就丢掉自己那份错误记账，**当帧**重新决策 ——
+该打就重新按下，该让路就让路。它只做"对账"，不改变任何攻击判定。
+
+**另外新增** `PauseInCastMode`（默认开）：法术模式下主动收手。理由不是"保险"，而是游戏此刻就是这么设计的 ——
+进模式时它已经把武器槽停掉了，而且模式内开火键的语义变成了"放法术"。收手还顺带**不再改道你在法术模式下瞄准的法术**
+（以前锁着敌人时，你在法术模式里手瞄的魔法也会被打到锁定目标身上）。退出法术模式的**当帧**自动恢复攻击。
 
 ## 快捷键
 
@@ -169,6 +193,8 @@ steamapps\common\Sephiria\
 | `OnlyLocalPlayer` | `true` | 只操作本地玩家角色 |
 | `ReleaseRetrySeconds` | `2` | 游戏超过这么久还没接受松手指令（角色不能移动时它会静默忽略），就升级处理：打警告，能强制清位就强制清 |
 | `HardReleaseFallback` | `true` | 最后的兜底：直接清掉游戏内部的 `isFireButtonDown` / `isAttackButtonDown` 开关。**只有主机 / 离线模式可以**（纯客户端不拥有那份状态，只能靠不停重发松手） |
+| `PauseInCastMode` | `true` | 法术攻击模式期间停手（见「本版修复」）。游戏在进模式时会自己把武器槽停掉，模式内开火键的语义是「放法术」，所以让路才是顺着的做法，而且能让 mod 不再改道你手瞄的法术。**退出模式的当帧自动恢复攻击**。想让它法术模式下也照样挥武器就设 `false` |
+| `FireHeartbeatSeconds` | `0.25` | mod 认为自己按着攻击键时，多久回头核实一次游戏自己的开火标志（反向看门狗，见「本版修复」）。`0` = 关闭核实。改大更安静、更省，改小发现得更快；正常玩没必要动 |
 
 ### General（常规）
 
@@ -203,6 +229,11 @@ steamapps\common\Sephiria\
   - `yielded: safe mode` → 见上面 `PauseInSafeMode`
   - `the game is not accepting attack input (CanMove false)` → 游戏此刻不接受角色输入
   这些只在**状态变化时**打一行（并带 1 秒限流），所以不会刷屏。把这几行发出来就能定位到底哪一条在挡。
+- **自动攻击卡住不动了**：日志里搜 `re-synced`，这是反向看门狗在工作（正常情况下应当**每次都能自愈**）：
+  - `... while the mod still held it (magic cast mode is active) - re-synced` / `(the game blocked avatar input)` 是**警告**级别：游戏把武器收回去了（法术模式会让位、等它结束自动继续）。
+  - `... (the player released the fire button) - re-synced` 是**信息**级别（限流 5 秒）：就是你自己点的鼠标，属于常规事件。
+  - 如果**搜不到** `re-synced`、自动攻击却依然卡住，把这一整段日志发出来 —— 说明还有一条没覆盖到的路径。
+- **法术模式下自动攻击停手**：这是 `PauseInCastMode` 的预期行为，日志里会写 `not attacking: yielded: magic cast mode is active`。想让它法术模式下也挥武器，把 `PauseInCastMode` 改成 `false`。
 - **想知道锁的是哪个范围**：日志里搜 `lock area =`。房间模式会打房间矩形的坐标和尺寸，例如 `lock area = room (12,-8)..(46,20) 34x28`；进新房间、或从房间走到走廊时会各打一行。如果显示的是 `radius` 而不是 `room`，说明这一层的房间没读出来（会有一条警告说明原因），把日志发我。
 - **触发距离不对 / 想知道依据**：日志里搜 `rangeFrom=`。会写成 `rangeFrom=BulletMoveModule_... 15.0/s x 0.90s` 或 `rangeFrom=MeleeCollision_Rectangle ...` 这种"数字 + 出处"的形式；来自状态切换后的数据集会标 `+state set`。拿它和实测感受对一下；不对就用 `RangeOverrides` 压。
 - **换神器 / 铁砧强化后打不到了**：正常情况下本版会自动跟随（`ProfileRefreshSeconds`）。日志里 `weapon <类名> ... attackRange=x.x (was y.y)` 那行就是变化记录，把这个发出来即可。若刷新周期被设成了 `0`，改回 `0.5` 或更大。
@@ -221,13 +252,15 @@ steamapps\common\Sephiria\
 - **同时面对多个敌人时会来回换目标**：这是"始终锁最近"的固有结果。想让它"认准一个打"就把 `SwitchHysteresis` 调到 `1.5 ~ 3`。
 - **不会微调走位**：目标横向跑动时，攻击方向是在每次出招瞬间取的，所以极快速横移的敌人可能偶尔落空 —— 这是「不自动走位」这个前提的必然结果。
 - **训练假人默认排除**：想打假人练手请把 `ExcludeDummy` 改成 `false`。
+- **法术模式之外**，你用技能键（0~7 号技能槽）放的法术，如果此刻锁着敌人，落点仍会被改道到锁定目标上（法术和武器共用同一个瞄准位置）。法术模式内不受影响（本版起 mod 整段让位）。
+- **`PauseInCastMode` 默认开启**：法术模式期间自动攻击会停手（有日志说明），退出模式当帧恢复。不喜欢就设 `false`。
 - **`PauseInSafeMode` 默认关闭** 是基于代码逻辑（游戏只对非敌对目标用 `safeMode` 拒绝伤害）判断的，不是实机逐一验证。若你在安全区里发现打了不该打的东西，把它设回 `true`。
 
 ---
 
 ## English quick version
 
-**Sephiria Auto Combat v1.0.1**
+**Sephiria Auto Combat v1.0.2**
 
 Auto-locks the **nearest** hostile enemy **inside the whole battle room you are standing in**,
 and drives the vanilla weapon attack chain at it. It never moves your character, never casts
@@ -268,6 +301,18 @@ enemy. This is what makes *your own* attacks hit the target: every weapon swings
 the attack button goes down, along whatever direction that transform produced, so without it
 the character turns to face the enemy while the swing still flies at the cursor. The dodge
 direction is deliberately left alone.
+
+**The game also releases the attack button behind the mod's back** (v1.0.2). Entering magic
+cast mode kills the weapon attack itself (`HandleOnActivateCastMode` -> `CastStop(100)` ->
+`PlayerAvatar.AttackButtonUp`), so do a manual click while auto-attack is running (the fire
+release runs the same code) and any UI takeover or cutscene (`PlayerInputController.OnDisable`).
+The mod used to keep believing the button was held, which made every part of it report
+"attacking" while the character stood still for the rest of the fight. A reverse watchdog now
+re-checks the game's own fire flag every `FireHeartbeatSeconds` (default 0.25s) and re-syncs on
+the spot - re-pressing if attacking is still allowed, standing down if the condition is a yield.
+`PauseInCastMode` (default on) stands the mod down for the whole of cast mode, which is what the
+game expects and also keeps it from redirecting the spell you aim by hand; auto-attack resumes
+the frame cast mode ends.
 
 **Diagnosable, not guesswork**: every path that can stop attacking reports why - switched off,
 no target, out of range (with the distance and the measured limit), yielded (naming which
