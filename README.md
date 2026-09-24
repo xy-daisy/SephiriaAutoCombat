@@ -1,6 +1,6 @@
 # Sephiria Auto Combat（自动索敌 / 自动攻击）
 
-版本 **v1.0.2** · 插件 GUID `com.sephiria.autocombat`
+版本 **v1.0.3** · 插件 GUID `com.sephiria.autocombat`
 
 **整个战斗房间**内自动锁定**距离最近的敌人**，并自动朝它挥动**当前武器**进行普攻。目标一直在动，锁定就跟着动 —— **不是**锁住一个就不放。
 
@@ -16,7 +16,29 @@
 - **攻击触发距离按武器实测**，并且**随武器状态实时跟随**（神器、铁砧附魔、武器形态切换都会改判定框，详见下文）。
 - **快捷键有屏幕提示**：按下 F5 / F6 会像游戏原生提示一样在屏幕上显示一行当前状态。
 
-## 本版修复（v1.0.2）
+## 本版修复（v1.0.3）
+
+**症状**：自动攻击会去打**还没落地**的小怪（从天而降、还悬在半空），以及**还没真正现身**的小怪
+（屏幕上只有一个召唤圈或爆炸预警，本体根本看不见）。
+
+**根因**：敌人出场时游戏会先把它**抬到高空并关掉 AI**，再播一段出场动画，最后才让它落地。
+四种出场方式都是这么做的（`AvatarSpawn_Apperance_Fall` 把高度设成 `20`，
+`_SummonFx` / `_SummonCurcle` / `_Explosion` 设成 `133` 并关掉重力）。
+要命的是**"抬起来"这一步发生在单位进入战斗列表之前**，所以它一出现就已经是
+「悬空 + 可锁定 + 没死 + 在房间内」的状态，而原来的筛选只看了死亡 / 可选中 / 阵营 / 距离，
+**一个高度都没看**。
+
+**修法**：锁敌时**跳过还没就位的单位**。判据不是自己定的，而是抄游戏自己的近炸引信
+（`BulletMoveModule_CrossbowMine`）筛目标用的那一条：高度高于阈值、或物体还没进场景，就不算可用目标。
+阈值 `5` 也是照抄它的 —— 正常站在地上的单位高度是 `0`，战斗中被击飞一般不到 `3`，
+所以**只会咬到出场中的怪**。两处都加了：候选扫描时直接跳过（它不参与"谁最近"的比较），
+已锁定的目标每帧复验时也会摘掉。
+
+场景里如果**只有**还没就位的怪，那就是**完全停手**，不会朝它挥空，等它落地再打。
+实测一局：11 次跳过（高度 `20.0` 的空降、`133.0` 的召唤各有），每一次之后几行内同一只怪都会
+重新出现 `Locked` / `Switched to` —— 落地即恢复攻击。
+
+### v1.0.2 — 法术模式下自动攻击冻结
 
 **症状**：开着自动攻击切到**法术攻击模式**，自动攻击就**再也不动了** —— 直到目标死亡或离开房间才恢复。
 
@@ -144,6 +166,8 @@ steamapps\common\Sephiria\
 | `ExcludeDummy` | `true` | 是否排除训练假人 / 稻草人（它们会把「战斗中」标志拉起来） |
 | `PreferBoss` | `false` | `true` = 有 boss 就优先锁 boss（**会覆盖"永远锁最近"**）。`false` = 一律锁最近的 |
 | `LogTargetChanges` | `true` | 锁定 / 切换 / 放弃目标时打日志 |
+| `IgnoreSpawnPending` | `true` | 跳过**还没就位**的敌人（未落地 / 还没现身，见「本版修复（v1.0.3）」）。`false` = 恢复成「能锁就打」，不管它在多高的地方 |
+| `SpawnPendingHeight` | `5` | 高度超过这个值就算「还没就位」。高度是俯视角的**高度轴**（`transform.position.z`），`5` 抄自游戏自己的选敌条件。正常地面怪是 `0`，被击飞一般不到 `3`，所以只咬出场动画 |
 
 ### Range（按武器决定攻击范围）
 
@@ -193,8 +217,8 @@ steamapps\common\Sephiria\
 | `OnlyLocalPlayer` | `true` | 只操作本地玩家角色 |
 | `ReleaseRetrySeconds` | `2` | 游戏超过这么久还没接受松手指令（角色不能移动时它会静默忽略），就升级处理：打警告，能强制清位就强制清 |
 | `HardReleaseFallback` | `true` | 最后的兜底：直接清掉游戏内部的 `isFireButtonDown` / `isAttackButtonDown` 开关。**只有主机 / 离线模式可以**（纯客户端不拥有那份状态，只能靠不停重发松手） |
-| `PauseInCastMode` | `true` | 法术攻击模式期间停手（见「本版修复」）。游戏在进模式时会自己把武器槽停掉，模式内开火键的语义是「放法术」，所以让路才是顺着的做法，而且能让 mod 不再改道你手瞄的法术。**退出模式的当帧自动恢复攻击**。想让它法术模式下也照样挥武器就设 `false` |
-| `FireHeartbeatSeconds` | `0.25` | mod 认为自己按着攻击键时，多久回头核实一次游戏自己的开火标志（反向看门狗，见「本版修复」）。`0` = 关闭核实。改大更安静、更省，改小发现得更快；正常玩没必要动 |
+| `PauseInCastMode` | `true` | 法术攻击模式期间停手（见 v1.0.2 修复）。游戏在进模式时会自己把武器槽停掉，模式内开火键的语义是「放法术」，所以让路才是顺着的做法，而且能让 mod 不再改道你手瞄的法术。**退出模式的当帧自动恢复攻击**。想让它法术模式下也照样挥武器就设 `false` |
+| `FireHeartbeatSeconds` | `0.25` | mod 认为自己按着攻击键时，多久回头核实一次游戏自己的开火标志（反向看门狗，见 v1.0.2 修复）。`0` = 关闭核实。改大更安静、更省，改小发现得更快；正常玩没必要动 |
 
 ### General（常规）
 
@@ -237,6 +261,10 @@ steamapps\common\Sephiria\
 - **想知道锁的是哪个范围**：日志里搜 `lock area =`。房间模式会打房间矩形的坐标和尺寸，例如 `lock area = room (12,-8)..(46,20) 34x28`；进新房间、或从房间走到走廊时会各打一行。如果显示的是 `radius` 而不是 `room`，说明这一层的房间没读出来（会有一条警告说明原因），把日志发我。
 - **触发距离不对 / 想知道依据**：日志里搜 `rangeFrom=`。会写成 `rangeFrom=BulletMoveModule_... 15.0/s x 0.90s` 或 `rangeFrom=MeleeCollision_Rectangle ...` 这种"数字 + 出处"的形式；来自状态切换后的数据集会标 `+state set`。拿它和实测感受对一下；不对就用 `RangeOverrides` 压。
 - **换神器 / 铁砧强化后打不到了**：正常情况下本版会自动跟随（`ProfileRefreshSeconds`）。日志里 `weapon <类名> ... attackRange=x.x (was y.y)` 那行就是变化记录，把这个发出来即可。若刷新周期被设成了 `0`，改回 `0.5` 或更大。
+- **怪就站在旁边却不打**：先搜日志 `still spawning`。有这行说明它**还在出场动画里**（未落地或还没现身），
+  这是 v1.0.3 的预期行为 —— 几行之后它会重新出现 `Locked` / `Switched to`，落地就开打。
+  如果它**明显已经站在地上**、日志却还在刷这行，把 `SpawnPendingHeight` 调大（例如 `8`）、
+  或者把 `IgnoreSpawnPending` 设成 `false`，并把那段日志发出来。
 - **打的不是我想要的那个敌人**：日志里搜 `Switched to` —— 每次换目标都会打一行 `Switched to X (dist ..., was Y)`。如果换得太频繁，把 `SwitchHysteresis` 调大（例如 `1.5`）；如果它迟迟不换，确认 `PreferBoss` 是 `false`。
 - **弓不射箭 / 一直拉不开**：日志里 `kind=ChargedRanged` 才是被识别成了蓄力武器。如果显示 `kind=Ranged` 说明你这把弓没有蓄力字段，那就应该按住即射；把日志发出来。
 - **出现 `attack button was stuck held`** 警告：游戏在角色不能移动时忽略了松手指令，mod 已经重试 / 兜底清位了。如果反复出现请把日志发出来。
@@ -249,6 +277,9 @@ steamapps\common\Sephiria\
 - **走廊 / 非房间区域没有房间数据**：站在走廊里时会退回按半径锁（默认 10）。走廊里本来就很少打起来，影响很小。
 - **多人联机**：每个装了本 mod 的客户端各自控制自己的角色。攻击走的是游戏原版的服务器指令，服务器会照常校验，别的玩家看不到任何异常。房间数据是各客户端用同一个种子本地生成的，所以锁定范围在主机和客户端上是一致的。
   - 如果你是**纯客户端**（不是主机），游戏内部那个"按住"开关在服务器那一份实例上，客户端碰不到。mod 会用不停重发松手指令的方式修，这条路是有效的；但 `HardReleaseFallback` 那层兜底只在主机 / 离线生效，日志里会说明。**瞄准重定向是客户端本地生效的，主机 / 纯客户端都一样有效。**
+- **出场中的敌人不会被打**（v1.0.3 起）：未落地 / 还没现身的怪会被跳过，落地后自动开始打 —— 这是有意为之。
+  万一某个特殊敌人天生一直悬在半空，它就会被一直跳过，那种情况把 `SpawnPendingHeight` 调小或设 `0`，
+  或直接关掉 `IgnoreSpawnPending`。
 - **同时面对多个敌人时会来回换目标**：这是"始终锁最近"的固有结果。想让它"认准一个打"就把 `SwitchHysteresis` 调到 `1.5 ~ 3`。
 - **不会微调走位**：目标横向跑动时，攻击方向是在每次出招瞬间取的，所以极快速横移的敌人可能偶尔落空 —— 这是「不自动走位」这个前提的必然结果。
 - **训练假人默认排除**：想打假人练手请把 `ExcludeDummy` 改成 `false`。
@@ -260,7 +291,7 @@ steamapps\common\Sephiria\
 
 ## English quick version
 
-**Sephiria Auto Combat v1.0.2**
+**Sephiria Auto Combat v1.0.3**
 
 Auto-locks the **nearest** hostile enemy **inside the whole battle room you are standing in**,
 and drives the vanilla weapon attack chain at it. It never moves your character, never casts
@@ -313,6 +344,14 @@ the spot - re-pressing if attacking is still allowed, standing down if the condi
 `PauseInCastMode` (default on) stands the mod down for the whole of cast mode, which is what the
 game expects and also keeps it from redirecting the spell you aim by hand; auto-attack resumes
 the frame cast mode ends.
+
+**Enemies that have not landed yet are not targets** (v1.0.3). Spawned enemies are lifted to
+height 20 (falling) or 133 (summon / explosion) with their AI disabled *before* they enter the
+combat list, so the old filter - death, targetable flag, faction, distance - happily locked onto
+something still mid-air or not visible at all. The lock now skips a unit whose altitude is above
+`Targeting.SpawnPendingHeight` (default 5, the same cutoff the game's own proximity mine uses),
+both while scanning and while re-validating a held target. If such a unit is the only thing
+around, the mod stops attacking rather than swinging at air.
 
 **Diagnosable, not guesswork**: every path that can stop attacking reports why - switched off,
 no target, out of range (with the distance and the measured limit), yielded (naming which
