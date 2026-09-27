@@ -1,6 +1,6 @@
 # Sephiria Auto Combat（自动索敌 / 自动攻击）
 
-版本 **v1.0.3** · 插件 GUID `com.sephiria.autocombat`
+版本 **v1.0.4** · 插件 GUID `com.sephiria.autocombat`
 
 **整个战斗房间**内自动锁定**距离最近的敌人**，并自动朝它挥动**当前武器**进行普攻。目标一直在动，锁定就跟着动 —— **不是**锁住一个就不放。
 
@@ -16,7 +16,24 @@
 - **攻击触发距离按武器实测**，并且**随武器状态实时跟随**（神器、铁砧附魔、武器形态切换都会改判定框，详见下文）。
 - **快捷键有屏幕提示**：按下 F5 / F6 会像游戏原生提示一样在屏幕上显示一行当前状态。
 
-## 本版修复（v1.0.3）
+## 本版修复（v1.0.4）
+
+**症状**：在另一位玩家的游戏上，mod 加载后每帧报错
+`MissingMethodException: Method not found: bool .PlayerInputController.get_HasAvatar()`，
+自动索敌完全不工作；而按 F5 / F6 的提示却照常弹出（两条路互不干扰，所以"有提示"不等于"在干活"）。
+
+**根因**：版本漂移。mod 原来直接调用游戏 `PlayerInputController.HasAvatar`（一个便捷属性，
+本质只是 `public bool HasAvatar => avatar;`）。本机游戏有这个属性，所以编译、运行都正常；
+但那位玩家的游戏 build 里没有它，运行时去调一个不存在的方法就抛异常。
+
+**修法**：不再 hard call `pic.HasAvatar`，改为 `ControllerHasAvatar(pic)` 用反射读取
+（只探测一次并缓存 `PropertyInfo`），读不到就回退 `pic.CombatBehaviour != null`
+（老 build 同样有 `CombatBehaviour`，且在正常玩家身上两者同真同假，所以作者这边行为完全不变）。
+整段判断本来就在 `GetLocalPlayer` 的 try/catch 里，万一将来 `CombatBehaviour` 也被改名 / 移除，
+也只会被优雅降级成"当前无本地玩家"，不会再每帧把异常甩出来。
+
+### v1.0.3 — 不再攻击还没落地的 / 还没出现的怪
+
 
 **症状**：自动攻击会去打**还没落地**的小怪（从天而降、还悬在半空），以及**还没真正现身**的小怪
 （屏幕上只有一个召唤圈或爆炸预警，本体根本看不见）。
@@ -166,7 +183,7 @@ steamapps\common\Sephiria\
 | `ExcludeDummy` | `true` | 是否排除训练假人 / 稻草人（它们会把「战斗中」标志拉起来） |
 | `PreferBoss` | `false` | `true` = 有 boss 就优先锁 boss（**会覆盖"永远锁最近"**）。`false` = 一律锁最近的 |
 | `LogTargetChanges` | `true` | 锁定 / 切换 / 放弃目标时打日志 |
-| `IgnoreSpawnPending` | `true` | 跳过**还没就位**的敌人（未落地 / 还没现身，见「本版修复（v1.0.3）」）。`false` = 恢复成「能锁就打」，不管它在多高的地方 |
+| `IgnoreSpawnPending` | `true` | 跳过**还没就位**的敌人（未落地 / 还没现身，见「v1.0.3 — 不再攻击还没落地的 / 还没出现的怪」）。`false` = 恢复成「能锁就打」，不管它在多高的地方 |
 | `SpawnPendingHeight` | `5` | 高度超过这个值就算「还没就位」。高度是俯视角的**高度轴**（`transform.position.z`），`5` 抄自游戏自己的选敌条件。正常地面怪是 `0`，被击飞一般不到 `3`，所以只咬出场动画 |
 
 ### Range（按武器决定攻击范围）
@@ -291,7 +308,7 @@ steamapps\common\Sephiria\
 
 ## English quick version
 
-**Sephiria Auto Combat v1.0.3**
+**Sephiria Auto Combat v1.0.4**
 
 Auto-locks the **nearest** hostile enemy **inside the whole battle room you are standing in**,
 and drives the vanilla weapon attack chain at it. It never moves your character, never casts
